@@ -76,6 +76,28 @@ void* server_thread()
     return NULL;
 }
 
+void get_signature(void* password, int password_len, char* salt, hashdata_t* hash) {
+    char combined[PASSWORD_LEN + SALT_LEN];    //Midlertidig buffer
+    
+    int pwd_len = (password_len > PASSWORD_LEN) ? PASSWORD_LEN : password_len;    //Sætter pwd_len til input hvis det er mindre end max. 
+    
+    memcpy(combined, password, pwd_len);            //Vi kopiere pwd_len bytes fra password ind 
+    memcpy(combined + PASSWORD_LEN, salt, SALT_LEN);   //Kopiere salt_len bytes fra salt ind i combined efter Vores password.
+    
+    get_data_sha(combined, *hash, PASSWORD_LEN + SALT_LEN, SHA256_HASH_SIZE);   
+    //Vi hasher vores kodeord. 
+    //Combined er passworded som skal hashes, 
+    //*hash er hvor resultatet skal gemmes.
+    //PASSWORD_LEN + SALT_LEN er længden / antal bytes der skal hashes. 
+    //SHA256_HASH_Size er den hashing funktion vi skal bruge.
+}
+
+// combined[32]:
+// [ m i t k o d e 1 2 3 4 5 a b c d ] [ 0 1 2 3 4 5 6 7 8 9 A B C D E F ]
+//    ^-- 16 bytes password --^   ^---------- 16 bytes salt ----------^
+
+// → SHA-256(combined) → 32-byte hash → skrives til *hash
+
 
 int main(int argc, char **argv)
 {
