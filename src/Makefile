@@ -16,7 +16,7 @@ peer: peer.c peer.h common.o compsys_helpers.o sha256.o
 	$(GCC) $< *.o -o $@ $(LD_FLAGS)
 
 sha256.o : sha256.c sha256.h
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(GCC) -c $< -o $@
 
 zip: ../../src.zip
 
