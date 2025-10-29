@@ -32,6 +32,36 @@ uint32_t peer_count = 0;
  * retrieve. This file request will be sent to a random peer on the network.
  * This request/retrieve interaction is then repeated forever.
  */ 
+
+
+//Send message skal kommenteres.
+int send_message(NetworkAddress_t peer_address, int command, char* request_body, int request_len){
+    char port_str[PORT_STR_LEN];
+    sprintf(port_str, "%d", peer_address.port);  // konverter int → char*
+    int clientfd = compsys_helper_open_clientfd(peer_address.ip, port_str); 
+
+    RequestHeader_t header;
+
+    memcpy(header.ip, my_address->ip, IP_LEN);
+    header.port = htonl(my_address->port);
+    memcpy(header.signature, my_address->signature, SHA256_HASH_SIZE);
+    header.command = htonl(command);
+    header.length = htonl(request_len);
+
+    char buffer[REQUEST_HEADER_LEN + MAX_MSG_LEN];
+
+    memcpy(buffer, &header, REQUEST_HEADER_LEN);
+    if (request_len > 0) {
+        memcpy(buffer + REQUEST_HEADER_LEN, request_body, request_len);
+    }
+
+    compsys_helper_writen(clientfd, buffer, REQUEST_HEADER_LEN + request_len);
+
+    return clientfd;
+}
+
+
+//client thread skal kommenteres.
 void* client_thread()
 {
     char peer_ip[IP_LEN];
@@ -57,6 +87,29 @@ void* client_thread()
     NetworkAddress_t peer_address;
     memcpy(peer_address.ip, peer_ip, IP_LEN);
     peer_address.port = atoi(peer_port);
+    
+    int clientfd = send_message(peer_address, COMMAND_REGISTER, NULL, 0);
+    if (clientfd < 0) {
+        fprintf(stderr, "Connection failed\n");
+        return NULL;
+    }
+
+    compsys_helper_state_t rio;
+    compsys_helper_readinitb(&rio, clientfd);  // clientfd fra send_message!
+
+    ReplyHeader_t reply;
+    compsys_helper_readnb(&rio, &reply, REPLY_HEADER_LEN);
+
+    // Konverter fra network order
+    reply.length = ntohl(reply.length);
+    reply.status = ntohl(reply.status);
+    reply.this_block = ntohl(reply.this_block);
+    reply.block_count = ntohl(reply.block_count);
+
+    printf("Reply: status=%d, length=%d, blocks=%d/%d\n",
+        reply.status, reply.length, reply.this_block, reply.block_count);
+
+    close(clientfd);
 
     // You should never see this printed in your finished implementation
     printf("Client thread done\n");
@@ -68,11 +121,29 @@ void* client_thread()
  * Function to act as basis for running the server thread. This thread will be
  * run concurrently with the client thread, but is infinite in nature.
  */
-void* server_thread()
-{
-    // You should never see this printed in your finished implementation
-    printf("Server thread done\n");
 
+//Server thread skal kommenteres.
+void* server_thread(void *arg) {
+    char port_str[PORT_STR_LEN];
+    sprintf(port_str, "%d", my_address->port);
+
+    int listenfd = compsys_helper_open_listenfd(port_str);
+    if (listenfd < 0) {
+        fprintf(stderr, "Failed to open listening socket on port %d\n", my_address->port);
+        return NULL;
+    }
+
+    printf("Server listening on %s:%d\n", my_address->ip, my_address->port);
+
+    while (1) {
+        int connfd = accept(listenfd, NULL, NULL);
+        if (connfd < 0) {
+            perror("accept");
+            continue;
+        }
+        // Senere: håndter request
+        close(connfd);
+    }
     return NULL;
 }
 
@@ -140,6 +211,8 @@ int main(int argc, char **argv)
     char salt[SALT_LEN+1] = "0123456789ABCDEF\0";
     //generate_random_salt(salt);
     memcpy(my_address->salt, salt, SALT_LEN);
+
+    get_signature(password, strlen(password), salt, &my_address->signature);      //Tilføjet
 
     // Setup the client and server threads 
     pthread_t client_thread_id;
