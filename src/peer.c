@@ -147,6 +147,9 @@ int main(int argc, char **argv)
     pthread_create(&client_thread_id, NULL, client_thread, NULL);
     pthread_create(&server_thread_id, NULL, server_thread, NULL);
 
+    get_signature(password, strlen(password), salt, &my_address->signature);      //Tilføjet
+
+
     // Wait for them to complete. 
     pthread_join(client_thread_id, NULL);
     pthread_join(server_thread_id, NULL);
