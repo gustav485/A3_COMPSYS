@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 
 #ifdef __APPLE__
 #include "./endian.h"
@@ -15,33 +16,31 @@
 
 #include "./peer.h"
 
-
-// Global variables to be used by both the server and client side of the peer.
-// Note the addition of mutexs to prevent race conditions.
+// Global variables
 NetworkAddress_t *my_address;
-
-NetworkAddress_t** network = NULL;
+NetworkAddress_t **network = NULL;
 uint32_t peer_count = 0;
+pthread_mutex_t network_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/*
- * Function to act as thread for all required client interactions. This thread 
- * will be run concurrently with the server_thread. It will start by requesting
- * the IP and port for another peer to connect to. Once both have been provided
- * the thread will register with that peer and expect a response outlining the
- * complete network. The user will then be prompted to provide a file path to
- * retrieve. This file request will be sent to a random peer on the network.
- * This request/retrieve interaction is then repeated forever.
- */ 
+/* ============================== UTILITY ============================== */
 
+void get_signature(void *password, int password_len, char *salt, hashdata_t *hash) {
+    char combined[PASSWORD_LEN + SALT_LEN];
+    int pwd_len = (password_len > PASSWORD_LEN) ? PASSWORD_LEN : password_len;
+    memcpy(combined, password, pwd_len);
+    memcpy(combined + PASSWORD_LEN, salt, SALT_LEN);
+    get_data_sha(combined, *hash, PASSWORD_LEN + SALT_LEN, SHA256_HASH_SIZE);
+}
 
-//Send message skal kommenteres.
-int send_message(NetworkAddress_t peer_address, int command, char* request_body, int request_len){
+/* ============================== CLIENT ============================== */
+
+int send_message(NetworkAddress_t peer_address, int command, char *request_body, int request_len) {
     char port_str[PORT_STR_LEN];
-    sprintf(port_str, "%d", peer_address.port);  // konverter int → char*
-    int clientfd = compsys_helper_open_clientfd(peer_address.ip, port_str); 
+    sprintf(port_str, "%d", peer_address.port);
+    int clientfd = compsys_helper_open_clientfd(peer_address.ip, port_str);
+    if (clientfd < 0) return -1;
 
     RequestHeader_t header;
-
     memcpy(header.ip, my_address->ip, IP_LEN);
     header.port = htonl(my_address->port);
     memcpy(header.signature, my_address->signature, SHA256_HASH_SIZE);
@@ -49,81 +48,172 @@ int send_message(NetworkAddress_t peer_address, int command, char* request_body,
     header.length = htonl(request_len);
 
     char buffer[REQUEST_HEADER_LEN + MAX_MSG_LEN];
-
     memcpy(buffer, &header, REQUEST_HEADER_LEN);
-    if (request_len > 0) {
+    if (request_len > 0)
         memcpy(buffer + REQUEST_HEADER_LEN, request_body, request_len);
-    }
 
     compsys_helper_writen(clientfd, buffer, REQUEST_HEADER_LEN + request_len);
-
     return clientfd;
 }
 
+void* client_thread() {
+    while (1) {
+        char peer_ip[IP_LEN];
+        fprintf(stdout, "Enter peer IP to connect to: ");
+        scanf("%16s", peer_ip);
 
-//client thread skal kommenteres.
-void* client_thread()
-{
-    char peer_ip[IP_LEN];
-    fprintf(stdout, "Enter peer IP to connect to: ");
-    scanf("%16s", peer_ip);
+        char peer_port[PORT_STR_LEN];
+        fprintf(stdout, "Enter peer port to connect to: ");
+        scanf("%16s", peer_port);
 
-    // Clean up password string as otherwise some extra chars can sneak in.
-    for (int i=strlen(peer_ip); i<IP_LEN; i++)
-    {
-        peer_ip[i] = '\0';
+        NetworkAddress_t peer_address;
+        memcpy(peer_address.ip, peer_ip, IP_LEN);
+        peer_address.port = atoi(peer_port);
+
+        int clientfd = send_message(peer_address, COMMAND_REGISTER, NULL, 0);
+        if (clientfd < 0) {
+            fprintf(stderr, "Connection failed\n");
+            continue;
+        }
+
+        compsys_helper_state_t rio;
+        compsys_helper_readinitb(&rio, clientfd);
+
+        ReplyHeader_t reply;
+        compsys_helper_readnb(&rio, &reply, REPLY_HEADER_LEN);
+
+        reply.length = ntohl(reply.length);
+        reply.status = ntohl(reply.status);
+        reply.this_block = ntohl(reply.this_block);
+        reply.block_count = ntohl(reply.block_count);
+
+        printf("Reply: status=%d, length=%d, blocks=%d/%d\n",
+               reply.status, reply.length, reply.this_block, reply.block_count);
+
+        // Læs body, hvis der er noget (fx netværksliste)
+        if (reply.length > 0) {
+            char *body = malloc(reply.length);
+            compsys_helper_readnb(&rio, body, reply.length);
+
+            int offset = 0;
+            printf("Peers in network:\n");
+            while (offset < reply.length) {
+                char ip[IP_LEN + 1];
+                memcpy(ip, body + offset, IP_LEN);
+                ip[IP_LEN] = '\0';
+                offset += IP_LEN;
+
+                uint32_t port;
+                memcpy(&port, body + offset, 4);
+                port = ntohl(port);
+                offset += 4;
+
+                offset += SHA256_HASH_SIZE; // skip signature
+                offset += SALT_LEN;         // skip salt
+
+                printf("  %s:%d\n", ip, port);
+            }
+            free(body);
+        }
+
+        close(clientfd);
     }
-
-    char peer_port[PORT_STR_LEN];
-    fprintf(stdout, "Enter peer port to connect to: ");
-    scanf("%16s", peer_port);
-
-    // Clean up password string as otherwise some extra chars can sneak in.
-    for (int i=strlen(peer_port); i<PORT_STR_LEN; i++)
-    {
-        peer_port[i] = '\0';
-    }
-
-    NetworkAddress_t peer_address;
-    memcpy(peer_address.ip, peer_ip, IP_LEN);
-    peer_address.port = atoi(peer_port);
-    
-    int clientfd = send_message(peer_address, COMMAND_REGISTER, NULL, 0);
-    if (clientfd < 0) {
-        fprintf(stderr, "Connection failed\n");
-        return NULL;
-    }
-
-    compsys_helper_state_t rio;
-    compsys_helper_readinitb(&rio, clientfd);  // clientfd fra send_message!
-
-    ReplyHeader_t reply;
-    compsys_helper_readnb(&rio, &reply, REPLY_HEADER_LEN);
-
-    // Konverter fra network order
-    reply.length = ntohl(reply.length);
-    reply.status = ntohl(reply.status);
-    reply.this_block = ntohl(reply.this_block);
-    reply.block_count = ntohl(reply.block_count);
-
-    printf("Reply: status=%d, length=%d, blocks=%d/%d\n",
-        reply.status, reply.length, reply.this_block, reply.block_count);
-
-    close(clientfd);
-
-    // You should never see this printed in your finished implementation
-    printf("Client thread done\n");
 
     return NULL;
 }
 
-/*
- * Function to act as basis for running the server thread. This thread will be
- * run concurrently with the client thread, but is infinite in nature.
- */
+/* ============================== SERVER ============================== */
 
-//Server thread skal kommenteres.
-void* server_thread(void *arg) {
+// Thread to handle a single client
+void *handle_client(void *arg) {
+    int connfd = *(int *)arg;
+    free(arg);
+
+    compsys_helper_state_t rio;
+    compsys_helper_readinitb(&rio, connfd);
+
+    RequestHeader_t req_header;
+    if (compsys_helper_readnb(&rio, &req_header, REQUEST_HEADER_LEN) <= 0) {
+        close(connfd);
+        return NULL;
+    }
+
+    req_header.port = ntohl(req_header.port);
+    req_header.command = ntohl(req_header.command);
+    req_header.length = ntohl(req_header.length);
+
+    if (req_header.command == COMMAND_REGISTER) {
+        printf("REGISTER request from %s:%d\n", req_header.ip, req_header.port);
+
+        pthread_mutex_lock(&network_mutex);
+        int exists = 0;
+        for (uint32_t i = 0; i < peer_count; i++) {
+            if (strcmp(network[i]->ip, req_header.ip) == 0 &&
+                network[i]->port == req_header.port) {
+                exists = 1;
+                break;
+            }
+        }
+
+        if (!exists) {
+            peer_count++;
+            network = realloc(network, peer_count * sizeof(NetworkAddress_t *));
+            network[peer_count - 1] = malloc(sizeof(NetworkAddress_t));
+            memcpy(network[peer_count - 1]->ip, req_header.ip, IP_LEN);
+            network[peer_count - 1]->port = req_header.port;
+            memcpy(network[peer_count - 1]->signature, req_header.signature, SHA256_HASH_SIZE);
+            memcpy(network[peer_count - 1]->salt, my_address->salt, SALT_LEN);
+        }
+
+        int body_len = peer_count * (IP_LEN + 4 + SHA256_HASH_SIZE + SALT_LEN);
+        char *body = malloc(body_len);
+        int offset = 0;
+
+        for (uint32_t i = 0; i < peer_count; i++) {
+            memcpy(body + offset, network[i]->ip, IP_LEN);
+            offset += IP_LEN;
+            uint32_t port_net = htonl(network[i]->port);
+            memcpy(body + offset, &port_net, 4);
+            offset += 4;
+            memcpy(body + offset, network[i]->signature, SHA256_HASH_SIZE);
+            offset += SHA256_HASH_SIZE;
+            memcpy(body + offset, network[i]->salt, SALT_LEN);
+            offset += SALT_LEN;
+        }
+        pthread_mutex_unlock(&network_mutex);
+
+        ReplyHeader_t reply;
+        reply.length = htonl(body_len);
+        reply.status = htonl(exists ? 2 : 1);
+        reply.this_block = htonl(1);
+        reply.block_count = htonl(1);
+        get_data_sha(body, reply.block_hash, body_len, SHA256_HASH_SIZE);
+        memcpy(reply.total_hash, reply.block_hash, SHA256_HASH_SIZE);
+
+        compsys_helper_writen(connfd, &reply, REPLY_HEADER_LEN);
+        if (body_len > 0)
+            compsys_helper_writen(connfd, body, body_len);
+
+        printf("→ Sent REGISTER reply to %s:%d (status %d, peers=%d)\n",
+               req_header.ip, req_header.port, exists ? 2 : 1, peer_count);
+               
+        pthread_mutex_lock(&network_mutex);
+        printf("Current network (%d peers):\n", peer_count);
+        for (uint32_t i = 0; i < peer_count; i++) {
+            printf("  %s:%d\n", network[i]->ip, network[i]->port);
+        }
+        pthread_mutex_unlock(&network_mutex);
+        free(body);
+    } else {
+        printf("Unknown command: %d\n", req_header.command);
+    }
+
+    close(connfd);
+    return NULL;
+}
+
+// Main server loop
+void *server_thread(void *arg) {
     char port_str[PORT_STR_LEN];
     sprintf(port_str, "%d", my_address->port);
 
@@ -141,46 +231,26 @@ void* server_thread(void *arg) {
             perror("accept");
             continue;
         }
-        // Senere: håndter request
-        close(connfd);
+
+        int *connfd_ptr = malloc(sizeof(int));
+        *connfd_ptr = connfd;
+        pthread_t tid;
+        pthread_create(&tid, NULL, handle_client, connfd_ptr);
+        pthread_detach(tid); // Ingen join nødvendig
     }
+
     return NULL;
 }
 
-void get_signature(void* password, int password_len, char* salt, hashdata_t* hash) {
-    char combined[PASSWORD_LEN + SALT_LEN];    //Midlertidig buffer
-    
-    int pwd_len = (password_len > PASSWORD_LEN) ? PASSWORD_LEN : password_len;    //Sætter pwd_len til input hvis det er mindre end max. 
-    
-    memcpy(combined, password, pwd_len);            //Vi kopiere pwd_len bytes fra password ind 
-    memcpy(combined + PASSWORD_LEN, salt, SALT_LEN);   //Kopiere salt_len bytes fra salt ind i combined efter Vores password.
-    
-    get_data_sha(combined, *hash, PASSWORD_LEN + SALT_LEN, SHA256_HASH_SIZE);   
-    //Vi hasher vores kodeord. 
-    //Combined er passworded som skal hashes, 
-    //*hash er hvor resultatet skal gemmes.
-    //PASSWORD_LEN + SALT_LEN er længden / antal bytes der skal hashes. 
-    //SHA256_HASH_Size er den hashing funktion vi skal bruge.
-}
+/* ============================== MAIN ============================== */
 
-// combined[32]:
-// [ m i t k o d e 1 2 3 4 5 a b c d ] [ 0 1 2 3 4 5 6 7 8 9 A B C D E F ]
-//    ^-- 16 bytes password --^   ^---------- 16 bytes salt ----------^
-
-// → SHA-256(combined) → 32-byte hash → skrives til *hash
-
-
-int main(int argc, char **argv)
-{
-    // Users should call this script with a single argument describing what 
-    // config to use
-    if (argc != 3)
-    {
+int main(int argc, char **argv) {
+    if (argc != 3) {
         fprintf(stderr, "Usage: %s <IP> <PORT>\n", argv[0]);
         exit(EXIT_FAILURE);
-    } 
+    }
 
-    my_address = (NetworkAddress_t*)malloc(sizeof(NetworkAddress_t));
+    my_address = malloc(sizeof(NetworkAddress_t));
     memset(my_address->ip, '\0', IP_LEN);
     memcpy(my_address->ip, argv[1], strlen(argv[1]));
     my_address->port = atoi(argv[2]);
@@ -189,10 +259,8 @@ int main(int argc, char **argv)
         fprintf(stderr, ">> Invalid peer IP: %s\n", my_address->ip);
         exit(EXIT_FAILURE);
     }
-    
     if (!is_valid_port(my_address->port)) {
-        fprintf(stderr, ">> Invalid peer port: %d\n", 
-            my_address->port);
+        fprintf(stderr, ">> Invalid peer port: %d\n", my_address->port);
         exit(EXIT_FAILURE);
     }
 
@@ -200,27 +268,17 @@ int main(int argc, char **argv)
     fprintf(stdout, "Create a password to proceed: ");
     scanf("%16s", password);
 
-    // Clean up password string as otherwise some extra chars can sneak in.
-    for (int i=strlen(password); i<PASSWORD_LEN; i++)
-    {
+    for (int i = strlen(password); i < PASSWORD_LEN; i++)
         password[i] = '\0';
-    }
 
-    // Most correctly, we should randomly generate our salts, but this can make
-    // repeated testing difficult so feel free to use the hard coded salt below
-    char salt[SALT_LEN+1] = "0123456789ABCDEF\0";
-    //generate_random_salt(salt);
+    char salt[SALT_LEN + 1] = "0123456789ABCDEF\0";
     memcpy(my_address->salt, salt, SALT_LEN);
+    get_signature(password, strlen(password), salt, &my_address->signature);
 
-    get_signature(password, strlen(password), salt, &my_address->signature);      //Tilføjet
-
-    // Setup the client and server threads 
-    pthread_t client_thread_id;
-    pthread_t server_thread_id;
+    pthread_t client_thread_id, server_thread_id;
     pthread_create(&client_thread_id, NULL, client_thread, NULL);
     pthread_create(&server_thread_id, NULL, server_thread, NULL);
 
-    // Wait for them to complete. 
     pthread_join(client_thread_id, NULL);
     pthread_join(server_thread_id, NULL);
 
