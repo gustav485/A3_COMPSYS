@@ -20,7 +20,6 @@ NetworkAddress_t *my_address;
 NetworkAddress_t **network = NULL;
 uint32_t peer_count = 0;
 pthread_mutex_t network_mutex = PTHREAD_MUTEX_INITIALIZER;
-#define BASE_DIR "/Users/frederik/Desktop/CompSys Afleveringer/A3_COMPSYS/python/first_peer/"
 
 /* ============================== UTILITY ============================== */
 
@@ -157,7 +156,7 @@ void* client_thread(void *arg) {
             continue;
         }
 
-        int fd = send_message(target.ip, target.port, COMMAND_RETREIVE, filename, strlen(filename) + 1);
+        int fd = send_message(target.ip, target.port, COMMAND_RETRIEVE, filename, strlen(filename));
         if (fd < 0) continue;
 
         compsys_helper_state_t rio;
@@ -313,7 +312,7 @@ void handle_retrieve(int fd, RequestHeader_t *req, char *filename) {
 
     // Brug BASE_DIR
     char fullpath[PATH_LEN];
-    snprintf(fullpath, sizeof(fullpath), "%s%s", BASE_DIR, filename);
+    snprintf(fullpath, sizeof(fullpath), "%s%s", filename);
 
     printf("Server trying to open file: %s\n", fullpath); // Debug
 
@@ -367,7 +366,7 @@ void* handle_request_thread(void *arg) {
             send_response(fd, STATUS_MALFORMED, NULL, 0);
             free(body); close(fd); return NULL;
         }
-        if (req.command == COMMAND_RETREIVE) body[req.length - 1] = '\0';
+        if (req.command == COMMAND_RETRIEVE) body[req.length - 1] = '\0';
     }
 
     if (!is_valid_ip(req.ip) || !is_valid_port(req.port)) {
@@ -377,7 +376,7 @@ void* handle_request_thread(void *arg) {
 
     if (req.command == COMMAND_REGISTER) handle_register(fd, &req, body);
     else if (req.command == COMMAND_INFORM) handle_inform(&req, body);
-    else if (req.command == COMMAND_RETREIVE) handle_retrieve(fd, &req, body);
+    else if (req.command == COMMAND_RETRIEVE) handle_retrieve(fd, &req, body);
     else send_response(fd, STATUS_OTHER, NULL, 0);
 
     free(body);
