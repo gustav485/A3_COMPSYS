@@ -15,7 +15,7 @@
  */
 
 #define COMMAND_REGISTER        1
-#define COMMAND_RETREIVE        2
+#define COMMAND_RETRIEVE        2
 #define COMMAND_INFORM          3
 
 #define STATUS_OK               1

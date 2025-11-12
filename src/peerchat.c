@@ -1,4 +1,3 @@
-/* ============================== peer.c ============================== */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,13 +14,11 @@
 
 #include "./peer.h"
 
-// Global state
 NetworkAddress_t *my_address;
 NetworkAddress_t **network = NULL;
 uint32_t peer_count = 0;
 pthread_mutex_t network_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* ============================== UTILITY ============================== */
 
 void get_signature(void *password, int password_len, char *salt, hashdata_t *hash) {
     char combined[PASSWORD_LEN + SALT_LEN];
@@ -34,7 +31,10 @@ void get_signature(void *password, int password_len, char *salt, hashdata_t *has
 void add_to_network(NetworkAddress_t *peer) {
     pthread_mutex_lock(&network_mutex);
     network = realloc(network, (peer_count + 1) * sizeof(NetworkAddress_t*));
-    if (!network) { pthread_mutex_unlock(&network_mutex); return; }
+    if (!network){ 
+        pthread_mutex_unlock(&network_mutex); 
+        return; 
+    }
 
     network[peer_count] = malloc(sizeof(NetworkAddress_t));
     if (network[peer_count]) {
@@ -49,18 +49,21 @@ void add_to_network(NetworkAddress_t *peer) {
 
 int select_random_peer(NetworkAddress_t *out) {
     pthread_mutex_lock(&network_mutex);
-    if (peer_count <= 1) { pthread_mutex_unlock(&network_mutex); return 0; }
+    if (peer_count <= 1) { 
+        pthread_mutex_unlock(&network_mutex); 
+        return 0; 
+    }
 
     int idx;
     do { idx = rand() % peer_count; }
-    while (strcmp(network[idx]->ip, my_address->ip) == 0 && network[idx]->port == my_address->port);
+    while (strcmp(network[idx]->ip, my_address->ip) == 0 && network[idx]->port == my_address->port);  //Hvis man tager en random peer, hvis den tager sig selv, leder den efter en anden peer.
 
     memcpy(out, network[idx], sizeof(NetworkAddress_t));
     pthread_mutex_unlock(&network_mutex);
     return 1;
 }
 
-/* ============================== CLIENT ============================== */
+//Client 
 
 int send_message(const char *ip, int port, int command, char *body, int len) {
     char port_str[PORT_STR_LEN];
@@ -93,12 +96,16 @@ void* client_thread(void *arg) {
     (void)arg;
 
     while (1) {
-        char ip[IP_LEN], port_str[PORT_STR_LEN];
+        char ip[IP_LEN];
+        char port_str[PORT_STR_LEN];
         printf("Enter peer IP to connect to: ");
-        if (!fgets(ip, sizeof(ip), stdin)) continue;
+        if (!fgets(ip, sizeof(ip), stdin)) {
+            continue;
+        }
         ip[strcspn(ip, "\n")] = '\0';
-        if (strlen(ip) == 0) continue;
-
+        if (strlen(ip) == 0) {
+            continue;
+        }
         printf("Enter peer port to connect to: ");
         if (!fgets(port_str, sizeof(port_str), stdin)) continue;
         port_str[strcspn(port_str, "\n")] = '\0';
@@ -192,8 +199,7 @@ void* client_thread(void *arg) {
     return NULL;
 }
 
-/* ============================== SERVER ============================== */
-
+//Server
 void send_response(int fd, uint32_t status, char *body, int len) {
     ReplyHeader_t reply;
     memset(&reply, 0, sizeof(reply));
@@ -211,7 +217,6 @@ void send_response(int fd, uint32_t status, char *body, int len) {
     compsys_helper_writen(fd, buffer, REPLY_HEADER_LEN + len);
 }
 
-/* ---------- FIXED handle_inform (no double-lock) ---------- */
 void handle_inform(RequestHeader_t *req, char *body) {
     if (req->length != PEER_ADDR_LEN) return;
     NetworkAddress_t p;
@@ -233,7 +238,6 @@ void handle_inform(RequestHeader_t *req, char *body) {
     }
 }
 
-/* ---------- FIXED handle_register (no lock nesting or I/O under lock) ---------- */
 void handle_register(int fd, RequestHeader_t *req, char *body) {
     (void)body;
     int exists = 0;
@@ -405,51 +409,76 @@ void* server_thread(void *arg) {
     return NULL;
 }
 
-/* ============================== MAIN ============================== */
-
+//Main
 int main(int argc, char **argv) {
-    if (argc != 3) { fprintf(stderr, "Usage: %s <IP> <PORT>\n", argv[0]); exit(1); }
-
+    // Users should call this script with a single argument describing what 
+    // config to use
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <IP> <PORT>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    } 
     srand(time(NULL));
     my_address = malloc(sizeof(NetworkAddress_t));
-    if (!my_address) exit(1);
+    if (!my_address) {
+        exit(1);
+    }
 
     strncpy(my_address->ip, argv[1], IP_LEN - 1);
     my_address->ip[IP_LEN - 1] = '\0';
     my_address->port = atoi(argv[2]);
 
-    if (!is_valid_ip(my_address->ip) || !is_valid_port(my_address->port)) {
-        fprintf(stderr, "Invalid IP/port\n"); free(my_address); exit(1);
+    if (!is_valid_ip(my_address->ip)) {
+        fprintf(stderr, ">> Invalid peer IP: %s\n", my_address->ip);
+        free(my_address);
+        exit(EXIT_FAILURE);
+    }
+    
+    if (!is_valid_port(my_address->port)) {
+        fprintf(stderr, ">> Invalid peer port: %d\n", my_address->port);
+        free(my_address);
+        exit(EXIT_FAILURE);
     }
 
     char password[PASSWORD_LEN];
     printf("Create a password to proceed: ");
-    if (scanf("%15s", password) != 1) exit(1);
-    int c; while ((c = getchar()) != '\n' && c != EOF) { } // flush newline
+    if (scanf("%15s", password) != 1){
+        exit(EXIT_FAILURE);
+    }
 
-    for (int i = strlen(password); i < PASSWORD_LEN; i++) password[i] = '\0';
+    // Clean up password string as otherwise some extra chars can sneak in.
+    for (int i=strlen(password); i<PASSWORD_LEN; i++) {
+        password[i] = '\0';
+    }
 
+    // Most correctly, we should randomly generate our salts, but this can make
+    // repeated testing difficult so feel free to use the hard coded salt below
     char salt[SALT_LEN];
     generate_random_salt(salt);
     memcpy(my_address->salt, salt, SALT_LEN);
     get_signature(password, strlen(password), salt, &my_address->signature);
 
-    pthread_t client_tid, server_tid;
+    pthread_t client_thread_id;
+    pthread_t server_thread_id;
 
-    if (pthread_create(&server_tid, NULL, server_thread, NULL) != 0) {
+    if (pthread_create(&server_thread_id, NULL, server_thread, NULL) != 0) {
         fprintf(stderr, "Failed to create server thread\n");
-        free(my_address); exit(1);
+        free(my_address); 
+        exit(EXIT_FAILURE);
     }
 
-    if (pthread_create(&client_tid, NULL, client_thread, NULL) != 0) {
+    if (pthread_create(&client_thread_id, NULL, client_thread, NULL) != 0) {
         fprintf(stderr, "Failed to create client thread\n");
-        free(my_address); exit(1);
+        free(my_address); 
+        exit(EXIT_FAILURE);
     }
 
-    pthread_join(client_tid, NULL);
-    pthread_join(server_tid, NULL);
+    pthread_join(client_thread_id, NULL);
+    pthread_join(server_thread_id, NULL);
 
-    for (uint32_t i = 0; i < peer_count; i++) free(network[i]);
+    for (uint32_t i = 0; i < peer_count; i++) {
+        free(network[i]);
+    }
+
     free(network);
     free(my_address);
     return 0;
