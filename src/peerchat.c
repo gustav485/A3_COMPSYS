@@ -29,10 +29,10 @@ void get_signature(void *password, int password_len, char *salt, hashdata_t *has
 }
 
 void add_to_network(NetworkAddress_t *peer) {
-    pthread_mutex_lock(&network_mutex);
+    assert(pthread_mutex_lock(&network_mutex) == 0);
     network = realloc(network, (peer_count + 1) * sizeof(NetworkAddress_t*));
-    if (!network){ 
-        pthread_mutex_unlock(&network_mutex); 
+    if (!network) { 
+        assert(pthread_mutex_unlock(&network_mutex) == 0); 
         return; 
     }
 
@@ -44,13 +44,13 @@ void add_to_network(NetworkAddress_t *peer) {
         memcpy(network[peer_count]->salt, peer->salt, SALT_LEN);
         peer_count++;
     }
-    pthread_mutex_unlock(&network_mutex);
+    assert(pthread_mutex_unlock(&network_mutex) == 0);
 }
 
 int select_random_peer(NetworkAddress_t *out) {
-    pthread_mutex_lock(&network_mutex);
+    assert(pthread_mutex_lock(&network_mutex) == 0);
     if (peer_count <= 1) { 
-        pthread_mutex_unlock(&network_mutex); 
+        assert(pthread_mutex_unlock(&network_mutex) == 0);
         return 0; 
     }
 
@@ -59,7 +59,7 @@ int select_random_peer(NetworkAddress_t *out) {
     while (strcmp(network[idx]->ip, my_address->ip) == 0 && network[idx]->port == my_address->port);  //Hvis man tager en random peer, hvis den tager sig selv, leder den efter en anden peer.
 
     memcpy(out, network[idx], sizeof(NetworkAddress_t));
-    pthread_mutex_unlock(&network_mutex);
+    assert(pthread_mutex_unlock(&network_mutex) == 0);
     return 1;
 }
 
@@ -86,7 +86,9 @@ int send_message(const char *ip, int port, int command, char *body, int len) {
 
     char buffer[REQUEST_HEADER_LEN + MAX_MSG_LEN];
     memcpy(buffer, &header, REQUEST_HEADER_LEN);
-    if (len > 0) memcpy(buffer + REQUEST_HEADER_LEN, body, len);
+    if (len > 0) {
+        memcpy(buffer + REQUEST_HEADER_LEN, body, len);
+    }
 
     compsys_helper_writen(fd, buffer, REQUEST_HEADER_LEN + len);
     return fd;
@@ -107,9 +109,13 @@ void* client_thread(void *arg) {
             continue;
         }
         printf("Enter peer port to connect to: ");
-        if (!fgets(port_str, sizeof(port_str), stdin)) continue;
+        if (!fgets(port_str, sizeof(port_str), stdin)) {
+            continue;
+        }
         port_str[strcspn(port_str, "\n")] = '\0';
-        if (strlen(port_str) == 0) continue;
+        if (strlen(port_str) == 0) {
+            continue;
+        }
 
         int port = atoi(port_str);
         if (!is_valid_ip(ip) || !is_valid_port(port)) {
@@ -118,14 +124,17 @@ void* client_thread(void *arg) {
         }
 
         int fd = send_message(ip, port, COMMAND_REGISTER, NULL, 0);
-        if (fd < 0) continue;
+        if (fd < 0) {
+            continue;
+        }
 
         compsys_helper_state_t rio;
         compsys_helper_readinitb(&rio, fd);
 
         ReplyHeader_t reply;
         if (compsys_helper_readnb(&rio, &reply, REPLY_HEADER_LEN) != REPLY_HEADER_LEN) {
-            close(fd); continue;
+            close(fd); 
+            continue;
         }
 
         reply.length = ntohl(reply.length);
@@ -153,9 +162,13 @@ void* client_thread(void *arg) {
     while (1) {
         printf("\nEnter filename to retrieve (or 'quit'): ");
         char filename[PATH_LEN];
-        if (!fgets(filename, sizeof(filename), stdin)) continue;
+        if (!fgets(filename, sizeof(filename), stdin)) {
+            continue;
+        }
         filename[strcspn(filename, "\n")] = '\0';
-        if (strcmp(filename, "quit") == 0) break;
+        if (strcmp(filename, "quit") == 0) {
+            break;
+        }
 
         NetworkAddress_t target;
         if (!select_random_peer(&target)) {
@@ -164,14 +177,17 @@ void* client_thread(void *arg) {
         }
 
         int fd = send_message(target.ip, target.port, COMMAND_RETRIEVE, filename, strlen(filename));
-        if (fd < 0) continue;
+        if (fd < 0) {
+            continue;
+        }
 
         compsys_helper_state_t rio;
         compsys_helper_readinitb(&rio, fd);
 
         ReplyHeader_t reply;
         if (compsys_helper_readnb(&rio, &reply, REPLY_HEADER_LEN) != REPLY_HEADER_LEN) {
-            close(fd); continue;
+            close(fd); 
+            continue;
         }
 
         reply.status = ntohl(reply.status);
@@ -179,12 +195,15 @@ void* client_thread(void *arg) {
 
         if (reply.status != STATUS_OK || reply.length == 0) {
             printf("File not found (status=%d)\n", reply.status);
-            close(fd); continue;
+            close(fd); 
+            continue;
         }
 
         char *filedata = malloc(reply.length);
         if (!filedata || compsys_helper_readnb(&rio, filedata, reply.length) != reply.length) {
-            free(filedata); close(fd); continue;
+            free(filedata); 
+            close(fd); 
+            continue;
         }
 
         FILE *fp = fopen(filename, "wb");
@@ -213,12 +232,16 @@ void send_response(int fd, uint32_t status, char *body, int len) {
     }
     char buffer[REPLY_HEADER_LEN + MAX_MSG_LEN];
     memcpy(buffer, &reply, REPLY_HEADER_LEN);
-    if (len > 0) memcpy(buffer + REPLY_HEADER_LEN, body, len);
+    if (len > 0) {
+        memcpy(buffer + REPLY_HEADER_LEN, body, len);
+    }
     compsys_helper_writen(fd, buffer, REPLY_HEADER_LEN + len);
 }
 
 void handle_inform(RequestHeader_t *req, char *body) {
-    if (req->length != PEER_ADDR_LEN) return;
+    if (req->length != PEER_ADDR_LEN) {
+        return;
+    }
     NetworkAddress_t p;
     int off = 0;
     memcpy(p.ip, body + off, IP_LEN); off += IP_LEN;
@@ -226,12 +249,15 @@ void handle_inform(RequestHeader_t *req, char *body) {
     memcpy(p.signature, body + off, SHA256_HASH_SIZE); off += SHA256_HASH_SIZE;
     memcpy(p.salt, body + off, SALT_LEN); off += SALT_LEN;
 
-    pthread_mutex_lock(&network_mutex);
+    assert(pthread_mutex_lock(&network_mutex) == 0);
     int exists = 0;
     for (uint32_t i = 0; i < peer_count; i++) {
-        if (strcmp(network[i]->ip, p.ip) == 0 && network[i]->port == p.port) { exists = 1; break; }
+        if (strcmp(network[i]->ip, p.ip) == 0 && network[i]->port == p.port) {
+            exists = 1; 
+            break; 
+        }
     }
-    pthread_mutex_unlock(&network_mutex);
+    assert(pthread_mutex_unlock(&network_mutex) == 0);
 
     if (!exists) {
         add_to_network(&p);
@@ -242,11 +268,14 @@ void handle_register(int fd, RequestHeader_t *req, char *body) {
     (void)body;
     int exists = 0;
 
-    pthread_mutex_lock(&network_mutex);
+    assert(pthread_mutex_lock(&network_mutex) == 0);
     for (uint32_t i = 0; i < peer_count; i++) {
-        if (strcmp(network[i]->ip, req->ip) == 0 && network[i]->port == req->port) { exists = 1; break; }
+        if (strcmp(network[i]->ip, req->ip) == 0 && network[i]->port == req->port) {
+            exists = 1; 
+            break;
+        }
     }
-    pthread_mutex_unlock(&network_mutex);
+    assert(pthread_mutex_unlock(&network_mutex) == 0);
 
     NetworkAddress_t new_peer;
     if (!exists) {
@@ -259,7 +288,7 @@ void handle_register(int fd, RequestHeader_t *req, char *body) {
         add_to_network(&new_peer);
     }
 
-    pthread_mutex_lock(&network_mutex);
+    assert(pthread_mutex_lock(&network_mutex) == 0);
     int len = peer_count * PEER_ADDR_LEN;
     char *resp = malloc(len);
     if (resp) {
@@ -272,24 +301,28 @@ void handle_register(int fd, RequestHeader_t *req, char *body) {
             memcpy(resp + off + IP_LEN + 4 + SHA256_HASH_SIZE, network[i]->salt, SALT_LEN);
         }
     }
-    pthread_mutex_unlock(&network_mutex);
+    assert(pthread_mutex_unlock(&network_mutex) == 0);
 
     send_response(fd, exists ? STATUS_PEER_EXISTS : STATUS_OK, resp, len);
     free(resp);
 
     if (!exists) {
-        pthread_mutex_lock(&network_mutex);
+        assert(pthread_mutex_lock(&network_mutex) == 0);
         uint32_t count = peer_count;
         NetworkAddress_t **copy = malloc(count * sizeof(NetworkAddress_t*));
         for (uint32_t i = 0; i < count; i++) {
             copy[i] = malloc(sizeof(NetworkAddress_t));
             memcpy(copy[i], network[i], sizeof(NetworkAddress_t));
         }
-        pthread_mutex_unlock(&network_mutex);
+        assert(pthread_mutex_unlock(&network_mutex) == 0);
 
         for (uint32_t i = 0; i < count; i++) {
-            if (strcmp(copy[i]->ip, new_peer.ip) == 0 && copy[i]->port == new_peer.port) continue;
-            if (strcmp(copy[i]->ip, my_address->ip) == 0 && copy[i]->port == my_address->port) continue;
+            if (strcmp(copy[i]->ip, new_peer.ip) == 0 && copy[i]->port == new_peer.port) {
+                continue;
+            }
+            if (strcmp(copy[i]->ip, my_address->ip) == 0 && copy[i]->port == my_address->port) {
+                continue;
+            }
             char inform_body[PEER_ADDR_LEN];
             int off = 0;
             memcpy(inform_body + off, new_peer.ip, IP_LEN); off += IP_LEN;
@@ -306,7 +339,9 @@ void handle_register(int fd, RequestHeader_t *req, char *body) {
 
 void handle_retrieve(int fd, RequestHeader_t *req, char *filename) {
     // Fjern indledende '/' hvis der er nogen
-    if (filename[0] == '/') memmove(filename, filename + 1, strlen(filename));
+    if (filename[0] == '/') {
+        memmove(filename, filename + 1, strlen(filename));
+    }
 
     // Beskyt mod path traversal
     if (strstr(filename, "..") != NULL) {
@@ -357,7 +392,10 @@ void* handle_request_thread(void *arg) {
     compsys_helper_readinitb(&rio, fd);
 
     RequestHeader_t req;
-    if (compsys_helper_readnb(&rio, &req, REQUEST_HEADER_LEN) != REQUEST_HEADER_LEN) { close(fd); return NULL; }
+    if (compsys_helper_readnb(&rio, &req, REQUEST_HEADER_LEN) != REQUEST_HEADER_LEN) {
+        close(fd);
+        return NULL;
+    }
 
     req.command = ntohl(req.command);
     req.length = ntohl(req.length);
@@ -368,20 +406,34 @@ void* handle_request_thread(void *arg) {
         body = malloc(req.length);
         if (!body || compsys_helper_readnb(&rio, body, req.length) != req.length) {
             send_response(fd, STATUS_MALFORMED, NULL, 0);
-            free(body); close(fd); return NULL;
+            free(body); 
+            close(fd); 
+            return NULL;
         }
-        if (req.command == COMMAND_RETRIEVE) body[req.length - 1] = '\0';
+        if (req.command == COMMAND_RETRIEVE) {
+            body[req.length - 1] = '\0';
+        }
     }
 
     if (!is_valid_ip(req.ip) || !is_valid_port(req.port)) {
         send_response(fd, STATUS_BAD_REQUEST, NULL, 0);
-        free(body); close(fd); return NULL;
+        free(body); 
+        close(fd); 
+        return NULL;
     }
 
-    if (req.command == COMMAND_REGISTER) handle_register(fd, &req, body);
-    else if (req.command == COMMAND_INFORM) handle_inform(&req, body);
-    else if (req.command == COMMAND_RETRIEVE) handle_retrieve(fd, &req, body);
-    else send_response(fd, STATUS_OTHER, NULL, 0);
+    if (req.command == COMMAND_REGISTER) {
+        handle_register(fd, &req, body);
+    }
+    else if (req.command == COMMAND_INFORM) {
+        handle_inform(&req, body);
+    }
+    else if (req.command == COMMAND_RETRIEVE) {
+        handle_retrieve(fd, &req, body);
+    }
+    else {
+        send_response(fd, STATUS_OTHER, NULL, 0);
+    }
 
     free(body);
     close(fd);
@@ -402,7 +454,9 @@ void* server_thread(void *arg) {
 
     while (1) {
         int connfd = accept(listenfd, NULL, NULL);
-        if (connfd < 0) continue;
+        if (connfd < 0) {
+            continue;
+        }
         pthread_t tid;
         pthread_create(&tid, NULL, handle_request_thread, (void*)(long)connfd);
     }
@@ -420,7 +474,7 @@ int main(int argc, char **argv) {
     srand(time(NULL));
     my_address = malloc(sizeof(NetworkAddress_t));
     if (!my_address) {
-        exit(1);
+        exit(EXIT_FAILURE);
     }
 
     strncpy(my_address->ip, argv[1], IP_LEN - 1);
