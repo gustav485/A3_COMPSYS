@@ -85,8 +85,8 @@ void print_peers() {
 }
 
 // Klient send
-int send_message(const char *ip, int port, int command, char *body, int len) {
-    char port_str[PORT_STR_LEN];        //Omdanner port til en char 
+int send_message(char *ip, int port, int command, char *body, int len) {
+    char port_str[PORT_STR_LEN];                            //Omdanner port til en char 
     snprintf(port_str, sizeof(port_str), "%d", port);           //compsys helper tager porten som string og ikke int.
 
     int fd = compsys_helper_open_clientfd(ip, port_str);    //Opretter forbindelse til en anden peer.
@@ -96,11 +96,13 @@ int send_message(const char *ip, int port, int command, char *body, int len) {
     }
 
     unsigned char header[REQUEST_HEADER_LEN];           //Midlertidig buffer til headeren.
-    int off = 0;            //Off er et offset der fortæller hvor i headeren vi er nået til.
+    int off = 0;                                //Off er et offset der fortæller hvor i headeren vi er nået til.
 
-    memset(header + off, 0, IP_LEN);            //headeren nulstilles fra tidligere brug.
-    size_t myip_len = strlen(my_address->ip);   //LÆngden af ip'en findes.
-    if (myip_len > IP_LEN) myip_len = IP_LEN;   //sikrer at ip'en ikke er for lang. 
+    memset(header + off, 0, IP_LEN);            //Headeren nulstilles fra tidligere brug.
+    size_t myip_len = strlen(my_address->ip);   //Længden af ip'en findes.
+    if (myip_len > IP_LEN) {                    //sikrer at ip'en ikke er for lang. 
+        myip_len = IP_LEN;
+    }   
     memcpy(header + off, my_address->ip, myip_len); //Ip'en kopieres ind i headeren
     off += IP_LEN;              //Offset rykkes 16 bytes frem.
 
@@ -121,10 +123,12 @@ int send_message(const char *ip, int port, int command, char *body, int len) {
 
     char buffer[REQUEST_HEADER_LEN + MAX_MSG_LEN];      //Vi samler hele beskeden i en stor buffer.
     memcpy(buffer, header, REQUEST_HEADER_LEN);
-    if (len > 0) memcpy(buffer + REQUEST_HEADER_LEN, body, len);
+    if (len > 0) {
+        memcpy(buffer + REQUEST_HEADER_LEN, body, len);
+    }
 
     compsys_helper_writen(fd, buffer, REQUEST_HEADER_LEN + len);        //Dette sender vi over netværket til peeren i den anden ende.
-    return fd;          //Vi returnere så ham der prøver at hente en fil får svar.
+    return fd;                                          //Vi returnere så ham der prøver at hente en fil får svar.
 }
 
 // Client thread
@@ -135,16 +139,22 @@ void* client_thread(void *arg) {
         char port_str[PORT_STR_LEN] = {0};
 
         printf("\nEnter peer IP to connect to: ");         
-        if (!fgets(ip, sizeof(ip), stdin)) continue;        //Læser det der bliver skrevet.
+        if (!fgets(ip, sizeof(ip), stdin)) {            //Læser det der bliver skrevet.
+            continue;
+        }        
         ip[strcspn(ip, "\n")] = '\0';           //ignorerer newline 
         if (strlen(ip) == 0) {              //error check
             break;
         }
 
         printf("Enter peer port: ");                                
-        if (!fgets(port_str, sizeof(port_str), stdin)) continue;        //Læser det der bliver skrevet.
+        if (!fgets(port_str, sizeof(port_str), stdin)) {  //Læser det der bliver skrevet.
+            continue;
+        }         
         port_str[strcspn(port_str, "\n")] = '\0';           //ignore newline
-        if (strlen(port_str) == 0) continue;           
+        if (strlen(port_str) == 0) {
+            continue;
+        }           
 
         int port = atoi(port_str);                      //Laver port strengen om til int
         if (!is_valid_ip(ip) || !is_valid_port(port)) {     //Tjekker om ip og port er valid ellers giv besked.
@@ -169,7 +179,7 @@ void* client_thread(void *arg) {
             if (reply.status == STATUS_OK && reply.length > 0) {                //Tjekker serverens status: forventer et OK.
                 char *body = malloc(reply.length);                          //Allokere plads til indholdet 
                 if (body && compsys_helper_readnb(&rio, body, reply.length) == reply.length) { //Vi læser reply.length ind i body'en
-                    int offset = 0;     //Laver et offset
+                    uint32_t offset = 0;     //Laver et offset
                     while (offset < reply.length) {         //Så længe offset er mindre end reply.length
                         NetworkAddress_t p;
                         memcpy(p.ip, body + offset, IP_LEN); offset += IP_LEN;
@@ -191,11 +201,18 @@ void* client_thread(void *arg) {
     while (1) {
         printf("\nEnter filename to retrieve (or 'quit' or 'peers'): ");        
         char input[PATH_LEN];               //buffer til filens sti som ønskes downloadet.
-        if (!fgets(input, sizeof(input), stdin)) continue;      //Læser det som bliver skrevet.
+        if (!fgets(input, sizeof(input), stdin)) {  //Læser det som bliver skrevet.
+            continue;
+        }      
         input[strcspn(input, "\n")] = '\0';
 
-        if (strcmp(input, "quit") == 0) break;                              //Hvis det er quit afbrydes
-        if (strcmp(input, "peers") == 0) { print_peers(); continue; }       //Hvis "peers" printes nuværende peers på netværket.
+        if (strcmp(input, "quit") == 0) {    //Hvis det er quit afbrydes
+            break;
+        }                              
+        if (strcmp(input, "peers") == 0) {        //Hvis "peers" printes nuværende peers på netværket.
+            print_peers(); 
+            continue; 
+        }
 
         NetworkAddress_t target;
         if (!select_random_peer(&target)) {             //Vælger tilfældig peer. Hvis sig selv sender den error besked
@@ -205,14 +222,17 @@ void* client_thread(void *arg) {
 
         printf(" Retrieving '%s' from %s:%d...\n", input, target.ip, target.port);
         int fd = send_message(target.ip, target.port, COMMAND_RETRIEVE, input, strlen(input));    //Opretter forbindelse til anden peer og sender besked.
-        if (fd < 0) continue;
+        if (fd < 0) {
+            continue;
+        }
 
         compsys_helper_state_t rio;
         compsys_helper_readinitb(&rio, fd);     //se 161 og 162. Opretter tom buffer
 
         ReplyHeader_t reply;
         if (compsys_helper_readnb(&rio, &reply, REPLY_HEADER_LEN) != REPLY_HEADER_LEN) {            //Hvis den ikke læser den præcise header, forsøges igen næste gang via contenuie
-            close(fd); continue;                        //Readnb læser data fra fd ned i bufferen.
+            close(fd);                              //Readnb læser data fra fd ned i bufferen.
+            continue;                        
         }
 
         reply.status = ntohl(reply.status);             //Konverter fra netværksformat (big-endian) til din computers format.
@@ -237,7 +257,8 @@ void* client_thread(void *arg) {
             fwrite(filedata, 1, reply.length, fp);
             fclose(fp);
             printf(" Saved: %s (%d bytes)\n", input, reply.length);
-        } else {
+        } 
+        else {
             printf(" Could not save file\n");
         }
         free(filedata);             //Frigiver og lukker 
@@ -261,18 +282,23 @@ void send_response(int fd, uint32_t status, char *body, int len) {
         get_data_sha(body, hash, len, SHA256_HASH_SIZE);
         memcpy(header + off, hash, SHA256_HASH_SIZE); off += SHA256_HASH_SIZE;
         memcpy(header + off, hash, SHA256_HASH_SIZE); off += SHA256_HASH_SIZE;
-    } else {
+    } 
+    else {
         off += 64; // zero hashes
     }
 
     char buffer[REPLY_HEADER_LEN + MAX_MSG_LEN];
     memcpy(buffer, header, REPLY_HEADER_LEN);
-    if (len > 0) memcpy(buffer + REPLY_HEADER_LEN, body, len);
+    if (len > 0) {
+        memcpy(buffer + REPLY_HEADER_LEN, body, len);
+    }
     compsys_helper_writen(fd, buffer, REPLY_HEADER_LEN + len);
 }
 
 void handle_inform(RequestHeader_t *req, char *body) {
-    if (req->length != PEER_ADDR_LEN) return;
+    if (req->length != PEER_ADDR_LEN) {
+        return;
+    }
     NetworkAddress_t p;
     int off = 0;
     memcpy(p.ip, body + off, IP_LEN); off += IP_LEN;
@@ -298,7 +324,8 @@ void handle_register(int fd, RequestHeader_t *req, char *body) {
     pthread_mutex_lock(&network_mutex);
     for (uint32_t i = 0; i < peer_count; i++) {
         if (ip_equal(network[i]->ip, req->ip) && network[i]->port == req->port) {
-            exists = 1; break;
+            exists = 1; 
+            break;
         }
     }
     pthread_mutex_unlock(&network_mutex);
@@ -307,7 +334,7 @@ void handle_register(int fd, RequestHeader_t *req, char *body) {
     if (!exists) {
         char salt[SALT_LEN];
         generate_random_salt(salt);
-        get_signature(req->signature, SHA256_HASH_SIZE, salt, new_peer.signature);
+        get_signature(req->signature, SHA256_HASH_SIZE, salt, &new_peer.signature);
         memcpy(new_peer.ip, req->ip, IP_LEN);
         new_peer.port = req->port;
         memcpy(new_peer.salt, salt, SALT_LEN);
@@ -345,8 +372,14 @@ void handle_register(int fd, RequestHeader_t *req, char *body) {
         pthread_mutex_unlock(&network_mutex);
 
         for (uint32_t i = 0; i < count; i++) {
-            if (ip_equal(copy[i]->ip, new_peer.ip) && copy[i]->port == new_peer.port) { free(copy[i]); continue; }
-            if (ip_equal(copy[i]->ip, my_address->ip) && copy[i]->port == my_address->port) { free(copy[i]); continue; }
+            if (ip_equal(copy[i]->ip, new_peer.ip) && copy[i]->port == new_peer.port) { 
+                free(copy[i]); 
+                continue; 
+            }
+            if (ip_equal(copy[i]->ip, my_address->ip) && copy[i]->port == my_address->port) { 
+                free(copy[i]); 
+                continue; 
+            }
 
             char inform_body[PEER_ADDR_LEN];
             int off = 0;
@@ -374,7 +407,9 @@ void handle_retrieve(int fd, RequestHeader_t *req, char *filename) {
     strncpy(clean, filename, sizeof(clean)-1);
 
     // Fjern indledende slash + forbyd ..
-    if (clean[0] == '/') memmove(clean, clean + 1, strlen(clean));
+    if (clean[0] == '/') {
+        memmove(clean, clean + 1, strlen(clean));
+    }
     if (strstr(clean, "..") || strchr(clean, '/')) {
         send_response(fd, STATUS_BAD_REQUEST, NULL, 0);
         return;
@@ -420,7 +455,8 @@ void* handle_request_thread(void *arg) {
 
     unsigned char header_buf[REQUEST_HEADER_LEN];
     if (compsys_helper_readnb(&rio, header_buf, REQUEST_HEADER_LEN) != REQUEST_HEADER_LEN) {
-        close(fd); return NULL;
+        close(fd); 
+        return NULL;
     }
 
     RequestHeader_t req = {0};
@@ -431,8 +467,12 @@ void* handle_request_thread(void *arg) {
     memcpy(req.ip, raw_ip, IP_LEN);
     req.ip[IP_LEN-1] = '\0';
     for (int i = IP_LEN-2; i >= 0; i--) {
-        if (req.ip[i] == '\0' || req.ip[i] == ' ') req.ip[i] = '\0';
-        else break;
+        if (req.ip[i] == '\0' || req.ip[i] == ' ') {
+            req.ip[i] = '\0';
+        }
+        else {
+            break;
+        }
     }
 
     uint32_t tmp; memcpy(&tmp, header_buf + off, 4); req.port = ntohl(tmp); off += 4;
@@ -447,7 +487,9 @@ void* handle_request_thread(void *arg) {
         body = malloc(req.length + 1);
         if (!body || compsys_helper_readnb(&rio, body, req.length) != req.length) {
             send_response(fd, STATUS_MALFORMED, NULL, 0);
-            free(body); close(fd); return NULL;
+            free(body); 
+            close(fd); 
+            return NULL;
         }
         body[req.length] = '\0';
 
@@ -458,13 +500,23 @@ void* handle_request_thread(void *arg) {
 
     if (!is_valid_ip(req.ip) || !is_valid_port(req.port)) {
         send_response(fd, STATUS_BAD_REQUEST, NULL, 0);
-        free(body); close(fd); return NULL;
+        free(body); 
+        close(fd); 
+        return NULL;
     }
 
-    if (req.command == COMMAND_REGISTER) handle_register(fd, &req, body);
-    else if (req.command == COMMAND_INFORM) handle_inform(&req, body);
-    else if (req.command == COMMAND_RETRIEVE) handle_retrieve(fd, &req, filename);
-    else send_response(fd, STATUS_OTHER, NULL, 0);
+    if (req.command == COMMAND_REGISTER) {
+        handle_register(fd, &req, body);
+    }
+    else if (req.command == COMMAND_INFORM) {
+        handle_inform(&req, body);
+    }
+    else if (req.command == COMMAND_RETRIEVE) {
+        handle_retrieve(fd, &req, filename);
+    }
+    else {
+        send_response(fd, STATUS_OTHER, NULL, 0);
+    }
 
     free(body);
     close(fd);
@@ -510,13 +562,15 @@ int main(int argc, char **argv) {
 
     char password[PASSWORD_LEN];
     printf("Create a password to proceed: ");
-    if (scanf("%15s", password) != 1) exit(1);
+    if (scanf("%15s", password) != 1) {
+        exit(1);
+    }
     getchar(); // eat newline
 
     char salt[SALT_LEN];
     generate_random_salt(salt);
     memcpy(my_address->salt, salt, SALT_LEN);
-    get_signature(password, strlen(password), salt, my_address->signature);
+    get_signature(password, strlen(password), salt, &my_address->signature);
 
     // Add ourselves to network list
     add_to_network(my_address);
@@ -529,7 +583,9 @@ int main(int argc, char **argv) {
     pthread_join(server_tid, NULL);
 
     // Cleanup
-    for (uint32_t i = 0; i < peer_count; i++) free(network[i]);
+    for (uint32_t i = 0; i < peer_count; i++) {
+        free(network[i]);
+    }
     free(network);
     free(my_address);
     return 0;
