@@ -1,0 +1,3 @@
+Valid UTF8: Hello
+Invalid bytes:
+€şÿÃ
