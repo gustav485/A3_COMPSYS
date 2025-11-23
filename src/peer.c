@@ -341,7 +341,6 @@ void handle_register(int fd, RequestHeader_t *req, char *body) {
         add_to_network(&new_peer);
     }
 
-    // Send full peer list
     pthread_mutex_lock(&network_mutex);
     int len = peer_count * PEER_ADDR_LEN;
     char *resp = len > 0 ? malloc(len) : NULL;
@@ -360,7 +359,6 @@ void handle_register(int fd, RequestHeader_t *req, char *body) {
     send_response(fd, exists ? STATUS_PEER_EXISTS : STATUS_OK, resp, len);
     free(resp);
 
-    // Inform others
     if (!exists) {
         pthread_mutex_lock(&network_mutex);
         uint32_t count = peer_count;
@@ -402,11 +400,9 @@ void handle_retrieve(int fd, RequestHeader_t *req, char *filename) {
         return;
     }
 
-    // Sikker filsti
     char clean[PATH_LEN] = {0};
     strncpy(clean, filename, sizeof(clean)-1);
 
-    // Fjern indledende slash + forbyd ..
     if (clean[0] == '/') {
         memmove(clean, clean + 1, strlen(clean));
     }
@@ -529,7 +525,7 @@ void* server_thread(void *arg) {
     snprintf(port_str, sizeof(port_str), "%d", my_address->port);
     int listenfd = compsys_helper_open_listenfd(port_str);
     if (listenfd < 0) {
-        fprintf(stderr, "Failed to bind to port %d\n", my_address->port);
+        fprintf(stderr, "Failed to connect to port %d\n", my_address->port);
         return NULL;
     }
     printf("Server listening on %s:%d\n", my_address->ip, my_address->port);
@@ -565,14 +561,13 @@ int main(int argc, char **argv) {
     if (scanf("%15s", password) != 1) {
         exit(1);
     }
-    getchar(); // eat newline
+    getchar();
 
     char salt[SALT_LEN];
     generate_random_salt(salt);
     memcpy(my_address->salt, salt, SALT_LEN);
     get_signature(password, strlen(password), salt, &my_address->signature);
 
-    // Add ourselves to network list
     add_to_network(my_address);
 
     pthread_t server_tid, client_tid;
@@ -582,7 +577,6 @@ int main(int argc, char **argv) {
     pthread_join(client_tid, NULL);
     pthread_join(server_tid, NULL);
 
-    // Cleanup
     for (uint32_t i = 0; i < peer_count; i++) {
         free(network[i]);
     }
